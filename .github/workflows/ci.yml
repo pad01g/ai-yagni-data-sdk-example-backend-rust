@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - run: make lint test
+      - name: Atlas（schema.sql が当たり、差分が残らず、壊す変更がない）
+        run: make schema BASE=origin/${{ github.base_ref || 'main' }}
+      - name: データの未来の検査
+        run: make futures
+      - name: データの未来の検査（共変更を含む）
+        if: github.event_name == 'pull_request'
+        run: make futures-pr BASE=origin/${{ github.base_ref }}
+
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make verify
+
+  compose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: docker compose build

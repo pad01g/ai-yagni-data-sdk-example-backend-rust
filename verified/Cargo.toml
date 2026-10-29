@@ -1,0 +1,18 @@
+[package]
+name = "shop-verified"
+description = "backend-rust のうち、Verus で証明する純粋な部分（セッションの期限・パスワードの長さ）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+vstd.workspace = true
+
+[package.metadata.verus]
+verify = true
+
+[lints]
+workspace = true

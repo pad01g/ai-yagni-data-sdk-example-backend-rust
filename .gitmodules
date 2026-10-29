@@ -1,0 +1,9 @@
+[submodule "submodules/frontend"]
+	path = submodules/frontend
+	url = https://github.com/pad01g/ai-yagni-data-sdk-example-frontend
+[submodule "submodules/proxy"]
+	path = submodules/proxy
+	url = https://github.com/pad01g/ai-yagni-data-sdk-example-backend-proxy
+[submodule "submodules/payment"]
+	path = submodules/payment
+	url = https://github.com/pad01g/ai-yagni-data-sdk-example-payment

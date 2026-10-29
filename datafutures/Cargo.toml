@@ -1,0 +1,16 @@
+[package]
+name = "datafutures"
+description = "このプロジェクトのデータの未来の検査（層3の宣言と、層2の当てはめ）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+ai-yagni-data-sdk.workspace = true
+ai-yagni-data-ec.workspace = true
+
+[lints]
+workspace = true
