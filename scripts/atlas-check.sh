@@ -8,7 +8,9 @@
 #      information_schema を比べる（Atlas の差分の文面を grep するより漏れがない）:
 #        - 表・列を消す
 #        - 列の型を変える、文字の長さや数の桁を減らす、符号を変える、照合順序を変える、NULL を許さなくする
-#        - 一意キーを消す（冪等キーなどの約束が黙って消える）
+#          （同じ仲間の中で広げるのは通す: TINYINT→…→BIGINT、CHAR→VARCHAR→TEXT→…→LONGTEXT）
+#        - 一意の約束を弱める（前の一意キーの列の組を、今のどの一意キーも守らない。名前が同じでも列が変われば数える）
+#        - 外部キーを消す、削除を連鎖（CASCADE / SET NULL）に変える（データが黙って消える）
 #      壊すと決めたなら ALLOW_DESTRUCTIVE=1 で通す。
 #   4. BASE のスキーマに BASE の代表データ（fixtures/）を入れた DB へ、今の schema.sql が当たる
 #      （今あるデータの上で変更が通る）。
@@ -27,6 +29,7 @@ cleanup() {
   rm -rf "$TMP"
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 if ! git -C "$ROOT" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
   echo "FAIL: BASE=$BASE が見つからない（git fetch するか、BASE を正しく渡す）" >&2
@@ -49,7 +52,7 @@ URL="mysql://root:atlas@$NAME:3306/shop"
 BASE_URL="mysql://root:atlas@$NAME:3306/base"
 DEV="mysql://root:atlas@$NAME:3306/atlas_dev"
 atlas() { docker run --rm --network "$NAME" -v "$ROOT":/s:ro -v "$TMP":/t:ro "$ATLAS" "$@"; }
-sql() { docker exec -i "$NAME" mysql -uroot -patlas -h127.0.0.1 --default-character-set=utf8mb4 -N "$@" 2>/dev/null; }
+sql() { docker exec -i -e MYSQL_PWD=atlas "$NAME" mysql -uroot -h127.0.0.1 --default-character-set=utf8mb4 -N "$@"; }
 
 echo "== 1. schema.sql が当たる"
 atlas schema apply --url "$URL" --to file:///s/schema.sql --dev-url "$DEV" --auto-approve >/dev/null
@@ -93,20 +96,49 @@ SELECT CONCAT('列を狭める: ', b.TABLE_NAME, '.', b.COLUMN_NAME, ' ', b.COLU
 FROM COLUMNS b
 JOIN COLUMNS n ON n.TABLE_SCHEMA = 'shop' AND n.TABLE_NAME = b.TABLE_NAME AND n.COLUMN_NAME = b.COLUMN_NAME
 WHERE b.TABLE_SCHEMA = 'base'
-  AND (b.DATA_TYPE <> n.DATA_TYPE
-       OR COALESCE(n.CHARACTER_MAXIMUM_LENGTH, 0) < COALESCE(b.CHARACTER_MAXIMUM_LENGTH, 0)
-       OR COALESCE(n.NUMERIC_PRECISION, 0) < COALESCE(b.NUMERIC_PRECISION, 0)
+  AND (-- 型の仲間（整数・文字列）の中で順位が下がらなければ広げただけ。仲間が違えば変える
+       (b.DATA_TYPE <> n.DATA_TYPE
+        AND NOT (FIELD(b.DATA_TYPE, 'tinyint', 'smallint', 'mediumint', 'int', 'bigint') > 0
+                 AND FIELD(n.DATA_TYPE, 'tinyint', 'smallint', 'mediumint', 'int', 'bigint')
+                     >= FIELD(b.DATA_TYPE, 'tinyint', 'smallint', 'mediumint', 'int', 'bigint'))
+        AND NOT (FIELD(b.DATA_TYPE, 'char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext') > 0
+                 AND FIELD(n.DATA_TYPE, 'char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext')
+                     >= FIELD(b.DATA_TYPE, 'char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext')
+                 AND COALESCE(n.CHARACTER_MAXIMUM_LENGTH, 0) >= COALESCE(b.CHARACTER_MAXIMUM_LENGTH, 0)))
+       OR (b.DATA_TYPE = n.DATA_TYPE
+           AND (COALESCE(n.CHARACTER_MAXIMUM_LENGTH, 0) < COALESCE(b.CHARACTER_MAXIMUM_LENGTH, 0)
+                OR COALESCE(n.NUMERIC_PRECISION, 0) < COALESCE(b.NUMERIC_PRECISION, 0)
+                OR (b.DATA_TYPE IN ('enum', 'set') AND b.COLUMN_TYPE <> n.COLUMN_TYPE)))
        OR COALESCE(n.NUMERIC_SCALE, 0) <> COALESCE(b.NUMERIC_SCALE, 0)
        OR COALESCE(n.DATETIME_PRECISION, 0) < COALESCE(b.DATETIME_PRECISION, 0)
        OR (b.COLUMN_TYPE LIKE '%unsigned') <> (n.COLUMN_TYPE LIKE '%unsigned')
        OR NOT (b.COLLATION_NAME <=> n.COLLATION_NAME)
        OR (b.IS_NULLABLE = 'YES' AND n.IS_NULLABLE = 'NO'))
 UNION ALL
-SELECT CONCAT('一意キーを消す: ', b.TABLE_NAME, '.', b.INDEX_NAME)
-FROM (SELECT DISTINCT TABLE_NAME, INDEX_NAME FROM STATISTICS WHERE TABLE_SCHEMA = 'base' AND NON_UNIQUE = 0) b
-WHERE NOT EXISTS (SELECT 1 FROM STATISTICS n
-                  WHERE n.TABLE_SCHEMA = 'shop' AND n.TABLE_NAME = b.TABLE_NAME
-                    AND n.INDEX_NAME = b.INDEX_NAME AND n.NON_UNIQUE = 0)
+-- 前の一意キーの列の組 B を、今のどれかの一意キー N（N の列 ⊆ B）が守っていれば、約束は弱まっていない
+SELECT CONCAT('一意の約束を弱める: ', b.TABLE_NAME, ' (', b.cols, ')')
+FROM (SELECT TABLE_NAME, INDEX_NAME, GROUP_CONCAT(COLUMN_NAME ORDER BY COLUMN_NAME) AS cols
+      FROM STATISTICS WHERE TABLE_SCHEMA = 'base' AND NON_UNIQUE = 0
+      GROUP BY TABLE_NAME, INDEX_NAME) b
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM (SELECT TABLE_NAME, INDEX_NAME FROM STATISTICS
+        WHERE TABLE_SCHEMA = 'shop' AND NON_UNIQUE = 0 GROUP BY TABLE_NAME, INDEX_NAME) n
+  WHERE n.TABLE_NAME = b.TABLE_NAME
+    AND NOT EXISTS (SELECT 1 FROM STATISTICS c
+                    WHERE c.TABLE_SCHEMA = 'shop' AND c.TABLE_NAME = n.TABLE_NAME AND c.INDEX_NAME = n.INDEX_NAME
+                      AND (c.COLUMN_NAME IS NULL OR c.SUB_PART IS NOT NULL
+                           OR FIND_IN_SET(c.COLUMN_NAME, b.cols) = 0)))
+UNION ALL
+SELECT CONCAT('外部キーを消す、または削除を連鎖させる: ', b.TABLE_NAME, '.', b.CONSTRAINT_NAME, ' ',
+              b.DELETE_RULE, ' -> ', COALESCE(n.DELETE_RULE, '(なし)'))
+FROM REFERENTIAL_CONSTRAINTS b
+LEFT JOIN REFERENTIAL_CONSTRAINTS n
+  ON n.CONSTRAINT_SCHEMA = 'shop' AND n.TABLE_NAME = b.TABLE_NAME AND n.CONSTRAINT_NAME = b.CONSTRAINT_NAME
+WHERE b.CONSTRAINT_SCHEMA = 'base'
+  AND EXISTS (SELECT 1 FROM TABLES t WHERE t.TABLE_SCHEMA = 'shop' AND t.TABLE_NAME = b.TABLE_NAME)
+  AND (n.CONSTRAINT_NAME IS NULL
+       OR (n.DELETE_RULE IN ('CASCADE', 'SET NULL') AND b.DELETE_RULE NOT IN ('CASCADE', 'SET NULL')))
 SQL
 )
 if [ -n "$found" ]; then
@@ -120,7 +152,7 @@ if [ -n "$found" ]; then
 fi
 
 echo "== 4. $BASE の代表データの上で schema.sql が当たる"
-for f in $(git -C "$ROOT" ls-tree --name-only "$BASE" fixtures/ | sort); do
+git -C "$ROOT" ls-tree -r --name-only "$BASE" -- fixtures/ | grep '\.sql$' | sort | while IFS= read -r f; do
   git -C "$ROOT" show "$BASE:$f" | sql base || { echo "FAIL: $BASE の $f が $BASE のスキーマに入らない" >&2; exit 1; }
 done
 if ! atlas schema apply --url "$BASE_URL" --to file:///s/schema.sql --dev-url "$DEV" --auto-approve >"$TMP/apply.log" 2>&1; then

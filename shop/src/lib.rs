@@ -10,7 +10,8 @@
 pub mod session;
 pub mod store;
 
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Request, State};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -37,23 +38,29 @@ pub struct App<S> {
 
 // ---------------------------------------------------------------------------------------- 失敗
 
-/// 利用者に返す失敗（`{"error": "..."}`）。set_cookie はセッションを消すときに付ける。
+/// 利用者に返す失敗（`{"error": "...", "code": "..."}`）。set_cookie はセッションを消すときに付ける。
+/// code は画面がふるまいを決めるための決まった名前（あるときだけ）。今は次のものがある:
+/// - `payment_conflict`: 前の支払いの結果を確かめている。同じ依頼（同じ冪等キー・同じカード）でやり直す
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
     pub message: String,
+    pub code: Option<&'static str>,
     pub set_cookie: Option<String>,
 }
 
 impl ApiError {
     fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self { status, message: message.into(), set_cookie: None }
+        Self { status, message: message.into(), code: None, set_cookie: None }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = Json(serde_json::json!({ "error": self.message }));
+        let body = match self.code {
+            Some(code) => Json(serde_json::json!({ "error": self.message, "code": code })),
+            None => Json(serde_json::json!({ "error": self.message })),
+        };
         match self.set_cookie {
             Some(c) => (self.status, [(header::SET_COOKIE, c)], body).into_response(),
             None => (self.status, body).into_response(),
@@ -83,6 +90,14 @@ fn declined(reason: &str) -> &'static str {
 /// 知らないメッセージをそのまま利用者に見せない。
 fn from_proxy(s: &Status) -> ApiError {
     let m = s.message();
+    if s.code() == Code::FailedPrecondition && m == "payment conflict" {
+        let mut e = ApiError::new(
+            StatusCode::CONFLICT,
+            "前の支払いの結果を確かめています。カートとカードを変えずに、もう一度注文してください",
+        );
+        e.code = Some("payment_conflict");
+        return e;
+    }
     let (status, message): (StatusCode, String) = match s.code() {
         Code::InvalidArgument => (
             StatusCode::BAD_REQUEST,
@@ -111,8 +126,6 @@ fn from_proxy(s: &Status) -> ApiError {
                 format!("在庫が足りません: {name}")
             } else if let Some(reason) = m.strip_prefix("payment declined: ") {
                 format!("決済が通りませんでした（{}）", declined(reason))
-            } else if m == "payment conflict" {
-                "前の支払いの結果を確かめています。前と同じカードでやり直してください".to_owned()
             } else {
                 "注文できませんでした".to_owned()
             };
@@ -124,7 +137,10 @@ fn from_proxy(s: &Status) -> ApiError {
             "決済サービスにつながりませんでした。同じ内容でもう一度注文してください（二重に請求はされません）"
                 .to_owned(),
         ),
-        Code::Unavailable | Code::DeadlineExceeded | Code::ResourceExhausted => {
+        Code::ResourceExhausted => {
+            (StatusCode::TOO_MANY_REQUESTS, "試す回数が多すぎます。しばらく待ってから試してください".to_owned())
+        }
+        Code::Unavailable | Code::DeadlineExceeded => {
             (StatusCode::SERVICE_UNAVAILABLE, "ただいま混み合っています。少し待って試してください".to_owned())
         }
         _ => {
@@ -151,6 +167,40 @@ impl<S: Store> App<S> {
         let c = s.customer.ok_or_else(|| self.fail(Status::internal("no customer in the session")))?;
         let cookie = self.cookies.set(&s.token, s.max_age);
         Ok((status, [(header::SET_COOKIE, cookie)], Json(CustomerView::from(c))).into_response())
+    }
+}
+
+/// JSON の本文。形が違えば、ほかの失敗と同じ `{"error": ...}` の形で返す（serde の文面は見せない）。
+pub struct Body<T>(pub T);
+
+impl<S: Send + Sync, T: serde::de::DeserializeOwned> FromRequest<S> for Body<T> {
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(v)) => Ok(Body(v)),
+            Err(JsonRejection::MissingJsonContentType(_)) => {
+                Err(ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "JSON で送ってください"))
+            }
+            Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+                Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "送られた内容が大きすぎます"))
+            }
+            Err(_) => Err(bad("送られた内容の形が正しくありません")),
+        }
+    }
+}
+
+/// パスの中の番号。数でなければ 404。
+pub struct Id(pub u64);
+
+impl<S: Send + Sync> FromRequestParts<S> for Id {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        axum::extract::Path::<u64>::from_request_parts(parts, state)
+            .await
+            .map(|axum::extract::Path(id)| Id(id))
+            .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "見つかりません"))
     }
 }
 
@@ -294,7 +344,7 @@ pub struct PlaceOrder {
 
 // ---------------------------------------------------------------------------------------- 操作
 
-async fn signup<S: Store>(State(app): State<App<S>>, Json(b): Json<Signup>) -> ApiResult<Response> {
+async fn signup<S: Store>(State(app): State<App<S>>, Body(b): Body<Signup>) -> ApiResult<Response> {
     if !shop_verified::password_length_ok(b.password.chars().count()) {
         return Err(bad(PASSWORD_LENGTH));
     }
@@ -303,7 +353,7 @@ async fn signup<S: Store>(State(app): State<App<S>>, Json(b): Json<Signup>) -> A
     app.signed_in(s, StatusCode::CREATED)
 }
 
-async fn login<S: Store>(State(app): State<App<S>>, Json(b): Json<Login>) -> ApiResult<Response> {
+async fn login<S: Store>(State(app): State<App<S>>, Body(b): Body<Login>) -> ApiResult<Response> {
     // 長すぎるパスワードは照合させない（proxy に重い計算をさせない）
     if b.password.chars().count() > shop_verified::MAX_PASSWORD {
         return Err(ApiError::new(StatusCode::UNAUTHORIZED, WRONG_CREDENTIALS));
@@ -320,9 +370,12 @@ async fn login<S: Store>(State(app): State<App<S>>, Json(b): Json<Login>) -> Api
 async fn logout<S: Store>(State(app): State<App<S>>, headers: HeaderMap) -> ApiResult<Response> {
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("");
     if let Some(t) = app.cookies.token(cookie) {
+        // 失敗したら cookie を残す（proxy でセッションが終わっていないのに、終わったように見せない）
         app.store.log_out(t.to_owned()).await.map_err(|e| {
             let mut e = app.fail(e);
-            e.set_cookie = Some(app.cookies.clear());
+            if e.status != StatusCode::UNAUTHORIZED {
+                e.message = format!("ログアウトできませんでした。{}", e.message);
+            }
             e
         })?;
     }
@@ -341,7 +394,7 @@ async fn products<S: Store>(State(app): State<App<S>>) -> ApiResult<Json<Vec<Pro
 async fn place_order<S: Store>(
     State(app): State<App<S>>,
     Token(token): Token,
-    Json(b): Json<PlaceOrder>,
+    Body(b): Body<PlaceOrder>,
 ) -> ApiResult<Response> {
     if b.lines.is_empty() {
         return Err(bad("カートが空です"));
@@ -370,11 +423,7 @@ async fn orders<S: Store>(State(app): State<App<S>>, Token(t): Token) -> ApiResu
     Ok(Json(list.into_iter().map(Into::into).collect()))
 }
 
-async fn order<S: Store>(
-    State(app): State<App<S>>,
-    Token(t): Token,
-    Path(id): Path<u64>,
-) -> ApiResult<Json<OrderView>> {
+async fn order<S: Store>(State(app): State<App<S>>, Token(t): Token, Id(id): Id) -> ApiResult<Json<OrderView>> {
     Ok(Json(app.store.get_order(t, id).await.map_err(|e| app.fail(e))?.into()))
 }
 

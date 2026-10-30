@@ -25,10 +25,21 @@ expect() {
 }
 uuid() { od -An -N16 -tx1 /dev/urandom | tr -d ' \n' | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12})$/\1-\2-\3-\4-\5/'; }
 
+stock() { curl -fsS "$URL/api/products" | jq ".[] | select(.id == $1) | .stock"; }
+
+# 代表データの注文 5 は、決済サービスに届かないまま残った pending の注文（トートバッグを 1 つ引き当て済み）。
+# proxy の突き合わせが declined に片付け、在庫を 2 から 3 に戻す（起動してすぐと、その後 1 分ごとに走る）
+i=0
+until [ "$(stock 5)" = 3 ]; do
+  i=$((i + 1))
+  [ "$i" -lt 90 ] || { echo "FAIL: 決着しない注文の在庫が戻らない（$(stock 5)）" >&2; exit 1; }
+  sleep 1
+done
+echo "ok   決着しないまま古くなった注文を片付け、在庫を戻す"
+
 expect "$(call POST /api/login '{"email":"Hanako@Example.com","password":"password"}')" 200 "大文字のメールでもログインできる"
 expect "$(call GET /api/me)" 200 "自分を読める"
 
-stock() { curl -fsS "$URL/api/products" | jq ".[] | select(.id == $1) | .stock"; }
 before=$(stock 3)
 key=$(uuid)
 body="{\"request_key\":\"$key\",\"lines\":[{\"product_id\":3,\"quantity\":2}],\"card_token\":\"tok_visa\"}"

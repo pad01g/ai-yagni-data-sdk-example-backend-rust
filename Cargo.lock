@@ -13,8 +13,8 @@ dependencies = [
 
 [[package]]
 name = "ai-yagni-data-ec"
-version = "0.2.0"
-source = "git+https://github.com/pad01g/ai-yagni-data-sdk-example-extension-rust?tag=v0.2.0#3a7802b77194545a5d04bea76e21cb06d5629234"
+version = "0.3.0"
+source = "git+https://github.com/pad01g/ai-yagni-data-sdk-example-extension-rust?tag=v0.3.0#ce78572937422f3a4b60618fa4b0a42218908e1e"
 dependencies = [
  "ai-yagni-data-ec-verified",
  "ai-yagni-data-sdk",
@@ -22,24 +22,24 @@ dependencies = [
 
 [[package]]
 name = "ai-yagni-data-ec-verified"
-version = "0.2.0"
-source = "git+https://github.com/pad01g/ai-yagni-data-sdk-example-extension-rust?tag=v0.2.0#3a7802b77194545a5d04bea76e21cb06d5629234"
+version = "0.3.0"
+source = "git+https://github.com/pad01g/ai-yagni-data-sdk-example-extension-rust?tag=v0.3.0#ce78572937422f3a4b60618fa4b0a42218908e1e"
 dependencies = [
  "vstd",
 ]
 
 [[package]]
 name = "ai-yagni-data-sdk"
-version = "0.2.0"
-source = "git+https://github.com/pad01g/ai-yagni-data-sdk-rust?tag=v0.2.0#dc9200713a376c465561f16cf1bfbc53afdfee34"
+version = "0.3.0"
+source = "git+https://github.com/pad01g/ai-yagni-data-sdk-rust?tag=v0.3.0#72f92521032ec09c14c9c58d5fe7d70c63eff196"
 dependencies = [
  "ai-yagni-data-sdk-verified",
 ]
 
 [[package]]
 name = "ai-yagni-data-sdk-verified"
-version = "0.2.0"
-source = "git+https://github.com/pad01g/ai-yagni-data-sdk-rust?tag=v0.2.0#dc9200713a376c465561f16cf1bfbc53afdfee34"
+version = "0.3.0"
+source = "git+https://github.com/pad01g/ai-yagni-data-sdk-rust?tag=v0.3.0#72f92521032ec09c14c9c58d5fe7d70c63eff196"
 dependencies = [
  "vstd",
 ]
@@ -151,7 +151,7 @@ checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
 name = "datafutures"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ai-yagni-data-ec",
  "ai-yagni-data-sdk",
@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "shop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "http-body-util",
@@ -832,8 +832,8 @@ dependencies = [
 
 [[package]]
 name = "shop-proxy-api"
-version = "0.2.0"
-source = "git+https://github.com/pad01g/ai-yagni-data-sdk-example-backend-proxy?tag=v0.2.0#a7af03f16d873f4c231d399a4ae60d6d4c9de512"
+version = "0.3.0"
+source = "git+https://github.com/pad01g/ai-yagni-data-sdk-example-backend-proxy?tag=v0.3.0#1d7c567e2ca02ed9c1ec17f7eb14fb3d5b5e457a"
 dependencies = [
  "prost",
  "protoc-bin-vendored",
@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "shop-verified"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "vstd",
 ]

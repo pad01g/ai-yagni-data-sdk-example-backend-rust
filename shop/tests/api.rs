@@ -303,6 +303,29 @@ async fn writes_from_another_site_are_refused() {
 }
 
 #[tokio::test]
+async fn malformed_bodies_get_the_usual_error_shape() {
+    let mut c = Client::new();
+    let (s, b) = c.call("POST", "/api/login", Some(serde_json::json!({"email": 1}))).await;
+    assert_eq!((s, b["error"].as_str()), (StatusCode::BAD_REQUEST, Some("送られた内容の形が正しくありません")));
+    c.signup("p@example.com").await;
+    assert_eq!(c.call("GET", "/api/orders/abc", None).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_payment_conflict_tells_the_page_to_keep_the_request() {
+    let mut c = Client::new();
+    c.signup("pc@example.com").await;
+    c.fake.0.lock().unwrap().fail_next = Some(Status::failed_precondition("payment conflict"));
+    let (s, b) = c.call("POST", "/api/orders", Some(order(&[(1, 1)], "tok_visa"))).await;
+    assert_eq!((s, b["code"].as_str()), (StatusCode::CONFLICT, Some("payment_conflict")));
+    c.fake.0.lock().unwrap().fail_next = Some(Status::resource_exhausted("too many attempts"));
+    assert_eq!(
+        c.call("POST", "/api/orders", Some(order(&[(1, 1)], "tok_visa"))).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[tokio::test]
 async fn a_tampered_session_is_refused() {
     let mut c = Client::new();
     c.signup("t@example.com").await;

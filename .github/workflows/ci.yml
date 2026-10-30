@@ -23,9 +23,15 @@ jobs:
           # PR は向かう先のブランチ、main への push は push の前のコミットと比べる
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
         run: |
-          case "$BASE" in
-            ''|0000000000000000000000000000000000000000) BASE=HEAD~1 ;;
-          esac
+          # push の前のコミットが無い（新しいブランチ）か、force push で辿れなければ、1 つ前と比べる。
+          # それも無ければ（最初のコミット）、比べずに 1 と 2 だけを確かめる
+          if [ -z "$BASE" ] || ! git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
+            echo "::warning::BASE=$BASE をたどれないので、1 つ前のコミットと比べる"
+            BASE=HEAD~1
+          fi
+          if ! git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
+            BASE=HEAD
+          fi
           make schema BASE="$BASE"
       - name: データの未来の検査
         run: make futures

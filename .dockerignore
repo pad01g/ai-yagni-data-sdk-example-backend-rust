@@ -1,4 +1,9 @@
-target
+# イメージに入れない（秘密と、ビルドに要らないもの）
+.env
 .git
+target
 submodules
+fixtures
+futures
+datafutures/target
 .changed-files

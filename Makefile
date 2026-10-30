@@ -55,7 +55,7 @@ futures-report: image submodules ## 語彙の対応表と、未来どうしの�
 	$(FUTURES) cargo run -q --locked -p datafutures -- report
 
 futures-pr: image submodules ## 共変更の検査も含める（BASE からの変更を見る）
-	git diff --name-only $(BASE)...HEAD > .changed-files
+	git diff --name-only --no-renames $(BASE)...HEAD > .changed-files
 	$(FUTURES) cargo run -q --locked -p datafutures -- check --changed /work/.changed-files --repo /work
 
 ci: lint test schema proxy-schema futures verify ## CI で走らせるもの全部
@@ -63,10 +63,10 @@ ci: lint test schema proxy-schema futures verify ## CI で走らせるもの全�
 env: .env ## 手元の秘密（DB のパスワード、セッションの鍵）を乱数で作る（あれば何もしない）
 
 .env:
-	@umask 077; { \
-	  echo "MYSQL_ROOT_PASSWORD=$$(openssl rand -hex 24)"; \
-	  echo "PROXY_DB_PASSWORD=$$(openssl rand -hex 24)"; \
-	  echo "SESSION_SECRET=$$(openssl rand -hex 32)"; \
+	@umask 077; r() { od -An -N$$1 -tx1 /dev/urandom | tr -d ' \n'; }; { \
+	  echo "MYSQL_ROOT_PASSWORD=$$(r 24)"; \
+	  echo "PROXY_DB_PASSWORD=$$(r 24)"; \
+	  echo "SESSION_SECRET=$$(r 32)"; \
 	} > .env
 	@echo ".env を作った（リポジトリには入れない）"
 
