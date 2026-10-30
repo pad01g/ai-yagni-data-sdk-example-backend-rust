@@ -5,33 +5,55 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           fetch-depth: 0
-      - run: make lint test
-      - name: Atlas（schema.sql が当たり、差分が残らず、壊す変更がない）
-        run: make schema BASE=origin/${{ github.base_ref || 'main' }}
+          persist-credentials: false
+      - run: make lint test proxy-schema
+      - name: Atlas（schema.sql が当たり、差分が残らず、壊しうる変更がなく、前のデータの上で当たる）
+        env:
+          # PR は向かう先のブランチ、main への push は push の前のコミットと比べる
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: |
+          case "$BASE" in
+            ''|0000000000000000000000000000000000000000) BASE=HEAD~1 ;;
+          esac
+          make schema BASE="$BASE"
       - name: データの未来の検査
         run: make futures
       - name: データの未来の検査（共変更を含む）
         if: github.event_name == 'pull_request'
-        run: make futures-pr BASE=origin/${{ github.base_ref }}
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: make futures-pr BASE="$BASE"
 
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: make verify
 
+  # 全体を compose で立て、HTTP で端から端まで試す
   compose:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
-      - run: docker compose build
+          persist-credentials: false
+      - run: make up
+      - run: scripts/smoke.sh
+      - if: failure()
+        run: docker compose logs --no-color | tail -200
+      - if: always()
+        run: make down

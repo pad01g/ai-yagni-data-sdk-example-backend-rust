@@ -5,7 +5,7 @@ use crate::shop::Shop;
 pub fn future(v: &Shop) -> Future {
     Future::new("erasure")
         .why("退会した顧客を行ごと消す。個人と結び付く注文と明細も一緒に消す")
-        .reviewed("2026-10-29")
+        .reviewed("2026-10-30")
         .expires("2027-10")
         .requires([&v.pii_stays_on_customers, &v.orders_refer_to_customers])
         .then([&v.erasing_a_customer_takes_their_orders])

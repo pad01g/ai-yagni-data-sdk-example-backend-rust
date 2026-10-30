@@ -1,25 +1,33 @@
 # 全体を手元で動かす（make up）。http://localhost:8080
 #
-# ネットワークを 3 つに分ける。backend からは MySQL にも決済サービスにも届かない。
-#   edge: frontend（nginx）と backend。frontend だけがホストにポートを開く
-#   app:  backend と proxy（gRPC）。外へは出られない
-#   data: proxy と MySQL と決済サービス（と、スキーマを当てる Atlas と代表データ）。外へは出られない
+# 秘密（DB のパスワード、セッションの鍵）は .env に置き、リポジトリには入れない。make up が初回に乱数で作る。
+#
+# ネットワークを 4 つに分ける。backend からは MySQL にも決済サービスにも届かず、外へも出られない。
+#   public: frontend（nginx）だけ。ホストの 127.0.0.1:8080 にだけ開く
+#   edge:   frontend と backend。外へは出られない
+#   app:    backend と proxy（gRPC）。外へは出られない
+#   data:   proxy と MySQL と決済サービス（と、スキーマを当てる Atlas と代表データ）。外へは出られない
 name: ai-yagni-shop
+
+x-mysql-root: &mysql-root
+  MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?run make env}
 
 services:
   mysql:
     image: mysql:8.4.6
     command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_0900_bin]
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      <<: *mysql-root
       MYSQL_DATABASE: shop
+      PROXY_DB_PASSWORD: ${PROXY_DB_PASSWORD:?run make env}
     volumes:
       - ./docker/mysql-init:/docker-entrypoint-initdb.d:ro
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: [CMD, mysql, -h127.0.0.1, -uroot, -proot, -e, SELECT 1]
+      test: [CMD-SHELL, 'mysql -h127.0.0.1 -uroot -p"$$MYSQL_ROOT_PASSWORD" -e "SELECT 1"']
       interval: 2s
       retries: 90
+    restart: unless-stopped
     networks: [data]
 
   # SE の作業: Atlas が schema.sql を今の DB との差分として当てる
@@ -28,9 +36,9 @@ services:
     command:
       - schema
       - apply
-      - --url=mysql://root:root@mysql:3306/shop
+      - --url=mysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/shop
       - --to=file:///schema/schema.sql
-      - --dev-url=mysql://root:root@mysql:3306/atlas_dev
+      - --dev-url=mysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/atlas_dev
       - --auto-approve
     volumes:
       - ./schema.sql:/schema/schema.sql:ro
@@ -38,53 +46,71 @@ services:
       mysql: { condition: service_healthy }
     networks: [data]
 
-  # SE の作業: 商品がまだなければ代表データを入れる
+  # SE の作業: proxy の権限を当て（表と列の単位なので、スキーマの後に毎回）、商品がまだなければ代表データを入れる
   seed:
     image: mysql:8.4.6
+    environment: *mysql-root
     entrypoint:
       - sh
       - -c
       - |
-        n=$$(mysql -hmysql -uroot -proot -N -e 'SELECT COUNT(*) FROM shop.products')
-        if [ "$$n" = 0 ]; then mysql -hmysql -uroot -proot --default-character-set=utf8mb4 shop < /fixtures/0001_shop.sql; fi
+        set -e
+        q() { mysql -hmysql -uroot -p"$$MYSQL_ROOT_PASSWORD" --default-character-set=utf8mb4 "$$@"; }
+        q < /grants.sql
+        n=$$(q -N -e 'SELECT COUNT(*) FROM shop.products')
+        if [ "$$n" = 0 ]; then for f in /fixtures/*.sql; do q shop < "$$f"; done; fi
     volumes:
       - ./fixtures:/fixtures:ro
+      - ./submodules/proxy/grants.sql:/grants.sql:ro
     depends_on:
       schema: { condition: service_completed_successfully }
     networks: [data]
 
   payment:
     build: ./submodules/payment
+    init: true
+    volumes:
+      - payment-data:/data
+    restart: unless-stopped
     networks: [data]
 
   proxy:
     build: ./submodules/proxy
+    init: true
     environment:
-      DATABASE_URL: mysql://proxy:proxy@mysql:3306/shop
+      DATABASE_URL: mysql://proxy:${PROXY_DB_PASSWORD}@mysql:3306/shop
       PAYMENT_URL: http://payment:8080
+      SESSION_SECRET: ${SESSION_SECRET:?run make env}
     depends_on:
       seed: { condition: service_completed_successfully }
       payment: { condition: service_started }
+    restart: unless-stopped
     networks: [data, app]
 
   backend:
     build: .
+    init: true
     environment:
       PROXY_URL: http://proxy:50051
-      SESSION_SECRET: local-development-only
+      # 手元は http なので Secure を付けない（https で配るときは消す）
+      COOKIE_SECURE: "0"
     depends_on: [proxy]
+    restart: unless-stopped
     networks: [app, edge]
 
   frontend:
     build: ./submodules/frontend
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]
     depends_on: [backend]
-    networks: [edge]
+    restart: unless-stopped
+    networks: [public, edge]
 
 networks:
-  edge: {}
+  public: {}
+  edge: { internal: true }
   app: { internal: true }
   data: { internal: true }
 
 volumes:
   mysql-data: {}
+  payment-data: {}

@@ -40,12 +40,19 @@ pub fn project(v: &Shop) -> Project {
         .vocabulary("Cargo.toml")
         .queries("submodules/proxy/queries")
         .words(v.all())
+        // 今の形の語は、未来の前提（requires）に使うものも不変条件に並べる（その未来を消しても守られるように）
         .invariants([
+            &v.prices_are_whole_minor_units,
+            &v.stock_floor_is_named,
+            &v.order_amounts_are_whole_minor_units,
             &v.order_totals_match_lines,
             &v.orders_are_keyed_by_request,
-            &v.lines_copy_the_price,
+            &v.lines_refer_to_products,
+            &v.lines_have_their_own_key,
+            &v.order_status_is_named,
             &v.pii_stays_on_customers,
-            &v.orders_carry_a_payment,
+            &v.orders_refer_to_customers,
+            &v.settled_orders_carry_a_payment,
             &v.payments_are_used_once,
         ])
         .future(multi_currency::future(v))
@@ -63,6 +70,31 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use ai_yagni_data_sdk::lint;
+
+    use crate::shop::Shop;
+
+    /// フレームワークのテストは、このリポジトリの schema.sql と fixtures の写しの上で語を確かめる。
+    /// 写しがずれていたら、ai-yagni-data-sdk-example-extension-rust の `ec/tests/fixtures/shop/` を
+    /// ここの正本で書き換えて、そのタグを上げる。
+    #[test]
+    fn the_extension_tests_the_same_shop() {
+        let root = super::root();
+        let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap();
+        assert!(ai_yagni_data_ec::shop::SCHEMA == read("schema.sql"), "the extension's copy of schema.sql drifted");
+        assert!(
+            ai_yagni_data_ec::shop::DATA == read("fixtures/0001_shop.sql"),
+            "the extension's copy of the fixtures drifted"
+        );
+    }
+
+    /// 語彙のフィールドの名前は、語の名前と同じ（未来の宣言で読む名前と、report に出る名前をそろえる）。
+    #[test]
+    fn fields_are_named_after_their_words() {
+        let v = Shop::new();
+        let mismatched: Vec<String> =
+            v.fields().iter().filter(|(f, w)| *f != w.name()).map(|(f, w)| format!("{f} != {}", w.name())).collect();
+        assert_eq!(mismatched, Vec::<String>::new());
+    }
 
     /// 当てはめ（層2）は SQL を文字列で持たず、フレームワークと SDK の語の型だけを使う。
     #[test]

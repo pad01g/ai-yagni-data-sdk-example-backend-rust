@@ -3,16 +3,16 @@ resolver = "3"
 members = ["shop", "verified", "datafutures"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
 repository = "https://github.com/pad01g/ai-yagni-data-sdk-example-backend-rust"
 
 [workspace.dependencies]
-ai-yagni-data-sdk = { git = "https://github.com/pad01g/ai-yagni-data-sdk-rust", tag = "v0.1.0" }
-ai-yagni-data-ec = { git = "https://github.com/pad01g/ai-yagni-data-sdk-example-extension-rust", tag = "v0.1.0" }
-shop-proxy-api = { git = "https://github.com/pad01g/ai-yagni-data-sdk-example-backend-proxy", tag = "v0.1.0" }
+ai-yagni-data-sdk = { git = "https://github.com/pad01g/ai-yagni-data-sdk-rust", tag = "v0.2.0" }
+ai-yagni-data-ec = { git = "https://github.com/pad01g/ai-yagni-data-sdk-example-extension-rust", tag = "v0.2.0" }
+shop-proxy-api = { git = "https://github.com/pad01g/ai-yagni-data-sdk-example-backend-proxy", tag = "v0.2.0" }
 vstd = { version = "=0.0.0-2026-10-04-0306" }
 
 [workspace.lints.rust]

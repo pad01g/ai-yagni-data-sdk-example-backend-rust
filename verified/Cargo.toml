@@ -1,6 +1,6 @@
 [package]
 name = "shop-verified"
-description = "backend-rust のうち、Verus で証明する純粋な部分（セッションの期限・パスワードの長さ）"
+description = "backend-rust のうち、Verus で証明する純粋な部分（依頼の冪等キーの形・パスワードの長さ）"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
